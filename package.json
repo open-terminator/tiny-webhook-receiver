@@ -1,0 +1,17 @@
+{
+  "name": "tiny-webhook-receiver",
+  "version": "0.1.0",
+  "description": "A tiny dependency-free webhook receiver in Node.js.",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "keywords": [
+    "webhook",
+    "github",
+    "nodejs",
+    "hmac"
+  ],
+  "license": "MIT"
+}

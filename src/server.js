@@ -1,0 +1,187 @@
+const http = require('http');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+const HOST = process.env.HOST || '0.0.0.0';
+const PORT = Number.parseInt(process.env.PORT || '3000', 10);
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
+const DATA_DIR = path.resolve(process.cwd(), 'data');
+
+fs.mkdirSync(DATA_DIR, { recursive: true });
+
+function sendJson(response, statusCode, payload) {
+  const body = JSON.stringify(payload, null, 2);
+
+  response.writeHead(statusCode, {
+    'content-type': 'application/json; charset=utf-8',
+    'content-length': Buffer.byteLength(body),
+  });
+
+  response.end(body);
+}
+
+function readRawBody(request) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+
+    request.on('data', (chunk) => {
+      chunks.push(chunk);
+    });
+
+    request.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+
+    request.on('error', reject);
+  });
+}
+
+function verifySignature(rawBody, signatureHeader, secret) {
+  if (!secret) {
+    return true;
+  }
+
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
+    return false;
+  }
+
+  const expected = `sha256=${crypto
+    .createHmac('sha256', secret)
+    .update(rawBody)
+    .digest('hex')}`;
+
+  const expectedBuffer = Buffer.from(expected, 'utf8');
+  const actualBuffer = Buffer.from(signatureHeader, 'utf8');
+
+  if (expectedBuffer.length !== actualBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+}
+
+function buildDeliveryFileName(deliveryId) {
+  const safeId = deliveryId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return `${timestamp}_${safeId}.json`;
+}
+
+function saveDelivery(delivery) {
+  const fileName = buildDeliveryFileName(delivery.deliveryId);
+  const filePath = path.join(DATA_DIR, fileName);
+  fs.writeFileSync(filePath, JSON.stringify(delivery, null, 2));
+  return fileName;
+}
+
+async function handleWebhook(request, response) {
+  const contentType = (request.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
+
+  if (contentType !== 'application/json') {
+    sendJson(response, 415, {
+      ok: false,
+      error: 'Unsupported media type',
+      expected: 'application/json',
+      received: contentType || null,
+    });
+    return;
+  }
+
+  const rawBody = await readRawBody(request);
+  const signatureHeader = request.headers['x-hub-signature-256'];
+  const signatureVerified = WEBHOOK_SECRET
+    ? verifySignature(rawBody, signatureHeader, WEBHOOK_SECRET)
+    : false;
+
+  if (WEBHOOK_SECRET && !signatureVerified) {
+    sendJson(response, 401, {
+      ok: false,
+      error: 'Invalid or missing webhook signature',
+    });
+    return;
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(rawBody.toString('utf8'));
+  } catch {
+    sendJson(response, 400, {
+      ok: false,
+      error: 'Request body must be valid JSON',
+    });
+    return;
+  }
+
+  const deliveryId = request.headers['x-github-delivery'] || crypto.randomUUID();
+  const event = request.headers['x-github-event'] || 'unknown';
+
+  const fileName = saveDelivery({
+    receivedAt: new Date().toISOString(),
+    deliveryId,
+    event,
+    signatureVerified,
+    payload,
+  });
+
+  sendJson(response, 200, {
+    ok: true,
+    savedAs: fileName,
+    signatureVerified,
+  });
+}
+
+function createServer() {
+  return http.createServer(async (request, response) => {
+    try {
+      const url = new URL(request.url || '/', 'http://localhost');
+
+      if (request.method === 'GET' && url.pathname === '/health') {
+        sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === 'POST' && url.pathname === '/webhook') {
+        await handleWebhook(request, response);
+        return;
+      }
+
+      sendJson(response, 404, {
+        ok: false,
+        error: 'Not found',
+      });
+    } catch (error) {
+      sendJson(response, 500, {
+        ok: false,
+        error: 'Internal server error',
+      });
+
+      console.error(error);
+    }
+  });
+}
+
+function startServer() {
+  const server = createServer();
+
+  server.on('error', (error) => {
+    console.error('Failed to start server:', error.message);
+    process.exitCode = 1;
+  });
+
+  server.listen(PORT, HOST, () => {
+    console.log(
+      `tiny-webhook-receiver listening on http://${HOST}:${PORT} (secret ${WEBHOOK_SECRET ? 'enabled' : 'disabled'})`
+    );
+  });
+
+  return server;
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  createServer,
+  startServer,
+};
