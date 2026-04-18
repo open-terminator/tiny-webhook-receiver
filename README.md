@@ -40,6 +40,17 @@ If `WEBHOOK_SECRET` is not set, `POST /webhook` accepts unsigned requests.
 ### `GET /health`
 Returns a simple health response.
 
+### `GET /deliveries`
+Returns saved deliveries from `data/*.json`, newest first.
+
+Each item includes:
+
+- `fileName`
+- `receivedAt`
+- `deliveryId`
+- `event`
+- `signatureVerified`
+
 ### `POST /webhook`
 Accepts a JSON payload and writes accepted deliveries to `data/*.json`.
 
@@ -55,6 +66,29 @@ Health check:
 
 ```bash
 curl -s http://127.0.0.1:3000/health
+```
+
+List saved deliveries:
+
+```bash
+curl -s http://127.0.0.1:3000/deliveries
+```
+
+Example deliveries response:
+
+```json
+{
+  "ok": true,
+  "deliveries": [
+    {
+      "fileName": "2026-04-18T10-20-30-000Z_f47ac10b-58cc-4372-a567-0e02b2c3d479.json",
+      "receivedAt": "2026-04-18T10:20:30.000Z",
+      "deliveryId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+      "event": "push",
+      "signatureVerified": true
+    }
+  ]
+}
 ```
 
 Unsigned webhook:

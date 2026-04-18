@@ -74,6 +74,34 @@ function saveDelivery(delivery) {
   return fileName;
 }
 
+function readDeliveries() {
+  const fileNames = fs
+    .readdirSync(DATA_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left));
+
+  return fileNames.flatMap((fileName) => {
+    const filePath = path.join(DATA_DIR, fileName);
+
+    try {
+      const delivery = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+      return [
+        {
+          fileName,
+          receivedAt: delivery.receivedAt || null,
+          deliveryId: delivery.deliveryId || null,
+          event: delivery.event || null,
+          signatureVerified: delivery.signatureVerified === true,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
 async function handleWebhook(request, response) {
   const contentType = (request.headers['content-type'] || '').split(';', 1)[0].trim().toLowerCase();
 
@@ -130,6 +158,13 @@ async function handleWebhook(request, response) {
   });
 }
 
+function handleDeliveries(_request, response) {
+  sendJson(response, 200, {
+    ok: true,
+    deliveries: readDeliveries(),
+  });
+}
+
 function createServer() {
   return http.createServer(async (request, response) => {
     try {
@@ -137,6 +172,11 @@ function createServer() {
 
       if (request.method === 'GET' && url.pathname === '/health') {
         sendJson(response, 200, { ok: true });
+        return;
+      }
+
+      if (request.method === 'GET' && url.pathname === '/deliveries') {
+        handleDeliveries(request, response);
         return;
       }
 
