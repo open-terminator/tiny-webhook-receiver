@@ -6,9 +6,13 @@ const path = require('path');
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || '';
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DEFAULT_DATA_DIR = path.resolve(process.cwd(), 'data');
 
-fs.mkdirSync(DATA_DIR, { recursive: true });
+function getDataDir() {
+  return path.resolve(process.env.DATA_DIR || DEFAULT_DATA_DIR);
+}
+
+fs.mkdirSync(getDataDir(), { recursive: true });
 
 function sendJson(response, statusCode, payload) {
   const body = JSON.stringify(payload, null, 2);
@@ -69,20 +73,27 @@ function buildDeliveryFileName(deliveryId) {
 
 function saveDelivery(delivery) {
   const fileName = buildDeliveryFileName(delivery.deliveryId);
-  const filePath = path.join(DATA_DIR, fileName);
+  const dataDir = getDataDir();
+  const filePath = path.join(dataDir, fileName);
+
+  fs.mkdirSync(dataDir, { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(delivery, null, 2));
   return fileName;
 }
 
 function readDeliveries() {
+  const dataDir = getDataDir();
+
+  fs.mkdirSync(dataDir, { recursive: true });
+
   const fileNames = fs
-    .readdirSync(DATA_DIR, { withFileTypes: true })
+    .readdirSync(dataDir, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
     .map((entry) => entry.name)
     .sort((left, right) => right.localeCompare(left));
 
   return fileNames.flatMap((fileName) => {
-    const filePath = path.join(DATA_DIR, fileName);
+    const filePath = path.join(dataDir, fileName);
 
     try {
       const delivery = JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -99,6 +110,88 @@ function readDeliveries() {
     } catch {
       return [];
     }
+  });
+}
+
+function readDeliveryById(deliveryId) {
+  const dataDir = getDataDir();
+
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const fileNames = fs
+    .readdirSync(dataDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
+    .map((entry) => entry.name)
+    .sort((left, right) => right.localeCompare(left));
+
+  for (const fileName of fileNames) {
+    const filePath = path.join(dataDir, fileName);
+
+    try {
+      const delivery = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+
+      if (delivery.deliveryId === deliveryId) {
+        return {
+          fileName,
+          ...delivery,
+        };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function parsePositiveInteger(value) {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed < 1) {
+    return null;
+  }
+
+  return parsed;
+}
+
+function parseBooleanFilter(value) {
+  if (!value) {
+    return null;
+  }
+
+  if (value === 'true') {
+    return true;
+  }
+
+  if (value === 'false') {
+    return false;
+  }
+
+  return null;
+}
+
+function filterDeliveries(deliveries, filters) {
+  return deliveries.filter((delivery) => {
+    if (filters.event && delivery.event !== filters.event) {
+      return false;
+    }
+
+    if (filters.deliveryId && delivery.deliveryId !== filters.deliveryId) {
+      return false;
+    }
+
+    if (
+      filters.signatureVerified !== null &&
+      delivery.signatureVerified !== filters.signatureVerified
+    ) {
+      return false;
+    }
+
+    return true;
   });
 }
 
@@ -158,10 +251,47 @@ async function handleWebhook(request, response) {
   });
 }
 
-function handleDeliveries(_request, response) {
+function handleDeliveries(response, url) {
+  const event = url.searchParams.get('event') || null;
+  const deliveryId = url.searchParams.get('deliveryId') || null;
+  const signatureVerified = parseBooleanFilter(url.searchParams.get('verified'));
+  const limit = parsePositiveInteger(url.searchParams.get('limit'));
+
+  const deliveries = filterDeliveries(readDeliveries(), {
+    event,
+    deliveryId,
+    signatureVerified,
+  });
+  const limitedDeliveries = limit ? deliveries.slice(0, limit) : deliveries;
+
   sendJson(response, 200, {
     ok: true,
-    deliveries: readDeliveries(),
+    deliveries: limitedDeliveries,
+    filters: {
+      event,
+      deliveryId,
+      verified: signatureVerified,
+      limit,
+    },
+    total: limitedDeliveries.length,
+  });
+}
+
+function handleDeliveryDetail(response, deliveryId) {
+  const delivery = readDeliveryById(deliveryId);
+
+  if (!delivery) {
+    sendJson(response, 404, {
+      ok: false,
+      error: 'Delivery not found',
+      deliveryId,
+    });
+    return;
+  }
+
+  sendJson(response, 200, {
+    ok: true,
+    delivery,
   });
 }
 
@@ -176,7 +306,13 @@ function createServer() {
       }
 
       if (request.method === 'GET' && url.pathname === '/deliveries') {
-        handleDeliveries(request, response);
+        handleDeliveries(response, url);
+        return;
+      }
+
+      const deliveryDetailMatch = url.pathname.match(/^\/deliveries\/([^/]+)$/);
+      if (request.method === 'GET' && deliveryDetailMatch) {
+        handleDeliveryDetail(response, decodeURIComponent(deliveryDetailMatch[1]));
         return;
       }
 

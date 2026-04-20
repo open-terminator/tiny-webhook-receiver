@@ -43,6 +43,13 @@ Returns a simple health response.
 ### `GET /deliveries`
 Returns saved deliveries from `data/*.json`, newest first.
 
+Optional query parameters:
+
+- `event=push` filters by exact event name
+- `deliveryId=<id>` filters by exact delivery ID
+- `verified=true|false` filters by signature verification status
+- `limit=<n>` returns only the first `n` matching deliveries
+
 Each item includes:
 
 - `fileName`
@@ -50,6 +57,11 @@ Each item includes:
 - `deliveryId`
 - `event`
 - `signatureVerified`
+
+### `GET /deliveries/<deliveryId>`
+Returns one saved delivery by exact delivery ID, including the stored `payload`.
+
+If no saved delivery matches, the endpoint returns `404`.
 
 ### `POST /webhook`
 Accepts a JSON payload and writes accepted deliveries to `data/*.json`.
@@ -74,11 +86,30 @@ List saved deliveries:
 curl -s http://127.0.0.1:3000/deliveries
 ```
 
+Fetch one saved delivery:
+
+```bash
+curl -s http://127.0.0.1:3000/deliveries/f47ac10b-58cc-4372-a567-0e02b2c3d479
+```
+
+Filter saved deliveries:
+
+```bash
+curl -s 'http://127.0.0.1:3000/deliveries?event=push&verified=true&limit=5'
+```
+
 Example deliveries response:
 
 ```json
 {
   "ok": true,
+  "filters": {
+    "event": null,
+    "deliveryId": null,
+    "verified": null,
+    "limit": null
+  },
+  "total": 1,
   "deliveries": [
     {
       "fileName": "2026-04-18T10-20-30-000Z_f47ac10b-58cc-4372-a567-0e02b2c3d479.json",
@@ -88,6 +119,24 @@ Example deliveries response:
       "signatureVerified": true
     }
   ]
+}
+```
+
+Example delivery detail response:
+
+```json
+{
+  "ok": true,
+  "delivery": {
+    "fileName": "2026-04-18T10-20-30-000Z_f47ac10b-58cc-4372-a567-0e02b2c3d479.json",
+    "receivedAt": "2026-04-18T10:20:30.000Z",
+    "deliveryId": "f47ac10b-58cc-4372-a567-0e02b2c3d479",
+    "event": "push",
+    "signatureVerified": true,
+    "payload": {
+      "action": "ping"
+    }
+  }
 }
 ```
 
